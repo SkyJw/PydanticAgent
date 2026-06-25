@@ -27,6 +27,9 @@ uv sync --extra dev
 默认使用 OpenAI-compatible Chat Completions 接口，可接 OpenAI、DeepSeek、
 DashScope 兼容模式、OpenRouter、Ollama 等服务：
 
+仓库提供了最新默认配置模板 `.env.example`。可以先复制为 `.env`，
+再按本地服务商填写模型、base URL 和 API key；`.env` 会被忽略，请勿提交真实密钥。
+
 ```powershell
 $env:PYDANTIC_AGENT_MODEL_PROVIDER = "openai-compatible"
 $env:PYDANTIC_AGENT_MODEL = "deepseek-chat"
