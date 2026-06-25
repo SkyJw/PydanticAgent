@@ -1,6 +1,6 @@
 import asyncio
 import re
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import datetime
 from typing import Any, Literal, TypeVar, cast
 
@@ -107,16 +107,23 @@ class ProblemLocatorAgentRunner:
         user_request: str,
         *,
         mock: bool | None = None,
+        debug: Callable[[str], None] | None = None,
     ) -> AsyncIterator[str]:
+        self._debug(debug, "收到请求，准备进入处理流程")
         use_mock = self.settings.mock if mock is None else mock
         if use_mock:
+            self._debug(debug, "mock 模式：跳过大模型调用")
             result = self._mock_handle_request(user_request, datetime.now())
+            self._debug(debug, "mock 模式：开始分块输出结果")
             for chunk in self._chunk_text(result.output):
                 yield chunk
+            self._debug(debug, "mock 模式：输出完成")
             return
 
         yield "### 意图识别\n\n"
-        classification = await self.classify_intent(user_request)
+        self._debug(debug, "开始意图识别")
+        classification = await self.classify_intent(user_request, debug=debug)
+        self._debug(debug, f"意图识别完成：{classification.intent.value}")
         yield f"- 意图：`{classification.intent.value}`\n"
         yield f"- 置信度：`{classification.confidence:.2f}`\n"
         if classification.reason:
@@ -124,7 +131,9 @@ class ProblemLocatorAgentRunner:
         yield "\n"
 
         if classification.intent is IntentType.CHAT:
+            self._debug(debug, "进入闲聊回答流程")
             agent = self._build_agent(instructions=CHAT_SYSTEM_PROMPT)
+            self._debug(debug, "开始流式调用大模型（闲聊）")
             async with asyncio.timeout(self.settings.request_timeout_seconds):
                 async with agent.run_stream(
                     user_request,
@@ -132,11 +141,15 @@ class ProblemLocatorAgentRunner:
                 ) as response:
                     async for delta in response.stream_text(delta=True, debounce_by=None):
                         yield delta
+            self._debug(debug, "闲聊回答完成")
             return
 
-        context = await self.extract_troubleshooting_context(user_request)
+        self._debug(debug, "开始抽取问题定位结构化上下文")
+        context = await self.extract_troubleshooting_context(user_request, debug=debug)
+        self._debug(debug, "结构化上下文抽取完成")
         yield f"{context.to_markdown()}\n\n### 定位建议\n\n"
         agent = self._build_agent(instructions=TROUBLESHOOTING_SYSTEM_PROMPT)
+        self._debug(debug, "开始流式调用大模型（定位建议）")
         async with asyncio.timeout(self.settings.request_timeout_seconds):
             async with agent.run_stream(
                 self._build_troubleshooting_prompt(user_request, context),
@@ -144,19 +157,32 @@ class ProblemLocatorAgentRunner:
             ) as response:
                 async for delta in response.stream_text(delta=True, debounce_by=None):
                     yield delta
+        self._debug(debug, "定位建议输出完成")
 
-    async def classify_intent(self, user_request: str) -> IntentClassification:
+    async def classify_intent(
+        self,
+        user_request: str,
+        *,
+        debug: Callable[[str], None] | None = None,
+    ) -> IntentClassification:
         return await self._run_structured_output(
             IntentClassification,
             user_request,
             instructions=INTENT_SYSTEM_PROMPT,
+            debug=debug,
         )
 
-    async def extract_troubleshooting_context(self, user_request: str) -> TroubleshootingContext:
+    async def extract_troubleshooting_context(
+        self,
+        user_request: str,
+        *,
+        debug: Callable[[str], None] | None = None,
+    ) -> TroubleshootingContext:
         return await self._run_structured_output(
             TroubleshootingContext,
             user_request,
             instructions=TROUBLESHOOTING_EXTRACT_PROMPT,
+            debug=debug,
         )
 
     def build_model(self) -> str | OpenAIChatModel:
@@ -190,16 +216,22 @@ class ProblemLocatorAgentRunner:
         async with asyncio.timeout(self.settings.request_timeout_seconds):
             return await awaitable
 
+    def _debug(self, debug: Callable[[str], None] | None, message: str) -> None:
+        if debug is not None:
+            debug(message)
+
     async def _run_structured_output(
         self,
         output_model: type[StructuredOutputModel],
         user_request: str,
         *,
         instructions: str,
+        debug: Callable[[str], None] | None = None,
     ) -> StructuredOutputModel:
         errors: list[str] = []
         for mode in self._structured_output_modes():
             try:
+                self._debug(debug, f"结构化输出尝试：{mode}")
                 return await self._run_structured_output_once(
                     output_model,
                     user_request,
@@ -207,8 +239,10 @@ class ProblemLocatorAgentRunner:
                     mode=mode,
                 )
             except TimeoutError:
+                self._debug(debug, f"结构化输出超时：{mode}")
                 errors.append(f"{mode}: timeout")
             except Exception as exc:
+                self._debug(debug, f"结构化输出失败：{mode} ({exc.__class__.__name__})")
                 errors.append(f"{mode}: {exc.__class__.__name__}")
                 if self.settings.structured_output_mode != "auto":
                     raise

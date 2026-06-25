@@ -17,7 +17,7 @@ def test_settings_default_to_auto_structured_output_with_timeout() -> None:
     settings = Settings()
 
     assert settings.structured_output_mode == "auto"
-    assert settings.request_timeout_seconds == 30.0
+    assert settings.request_timeout_seconds == 7.0
     assert settings.model_retries == 3
 
 

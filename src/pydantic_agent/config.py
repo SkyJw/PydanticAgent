@@ -19,7 +19,7 @@ class Settings(BaseSettings):
         description="Structured output mode. auto tries native, then tool, then prompted output.",
     )
     request_timeout_seconds: float = Field(
-        default=30.0,
+        default=7.0,
         gt=0,
         description="Timeout in seconds for each LLM request attempt.",
     )

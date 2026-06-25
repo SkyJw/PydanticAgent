@@ -23,6 +23,7 @@ async def test_tui_clears_input_after_submit() -> None:
         await pilot.pause()
 
         assert app.query_one("#status", Static).content == "完成"
+        assert "运行完成" in str(app.query_one("#debug", Static).content)
 
 
 async def test_tui_maps_keypad_decimal_to_dot() -> None:
@@ -36,3 +37,11 @@ async def test_tui_maps_keypad_decimal_to_dot() -> None:
         await pilot.press("decimal")
 
         assert prompt.value == "."
+
+
+async def test_tui_shows_debug_panel() -> None:
+    runner = ProblemLocatorAgentRunner(Settings(mock=True))
+    app = ProblemLocatorApp(runner=runner)
+
+    async with app.run_test():
+        assert "调试信息窗口" in str(app.query_one("#debug", Static).content)
