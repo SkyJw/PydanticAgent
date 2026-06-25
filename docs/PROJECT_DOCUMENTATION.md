@@ -30,6 +30,7 @@
 ```text
 .
 ├── AGENTS.md
+├── .env.example
 ├── README.md
 ├── docs/
 │   └── PROJECT_DOCUMENTATION.md
@@ -54,6 +55,11 @@
 ### `src/pydantic_agent/config.py`
 
 负责读取运行配置。
+
+仓库根目录提供 `.env.example`，包含当前默认配置项和常见
+OpenAI-compatible 服务商 base URL 示例。首次配置时可复制为 `.env`
+后按需修改；`.env` 会被 `.gitignore` 忽略，不要提交包含真实 API key
+或其他敏感信息的本地配置文件。
 
 主要配置项：
 
