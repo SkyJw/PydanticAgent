@@ -23,6 +23,11 @@ class Settings(BaseSettings):
         gt=0,
         description="Timeout in seconds for each LLM request attempt.",
     )
+    model_retries: int = Field(
+        default=3,
+        ge=0,
+        description="Maximum number of Pydantic AI retries for model/output/tool failures.",
+    )
     model: str = Field(default="gpt-5.2", description="Model name or Pydantic AI model string")
     openai_base_url: str | None = Field(
         default=None,
