@@ -1,9 +1,11 @@
+import asyncio
 import re
 from collections.abc import AsyncIterator
 from datetime import datetime
-from typing import cast
+from typing import Any, Literal, TypeVar, cast
 
-from pydantic_ai import Agent
+from pydantic import BaseModel
+from pydantic_ai import Agent, NativeOutput, PromptedOutput, ToolOutput
 from pydantic_ai.models.openai import OpenAIChatModel, OpenAIModelName
 from pydantic_ai.providers.openai import OpenAIProvider
 
@@ -15,6 +17,9 @@ from pydantic_agent.models import (
     RunStatus,
     TroubleshootingContext,
 )
+
+StructuredOutputModel = TypeVar("StructuredOutputModel", bound=BaseModel)
+StructuredOutputMode = Literal["native", "tool", "prompted"]
 
 INTENT_SYSTEM_PROMPT = """你是底层软件问题辅助定位 agent 的意图识别层。
 只判断用户输入属于哪一种意图：
@@ -64,7 +69,7 @@ class ProblemLocatorAgentRunner:
         classification = await self.classify_intent(user_request)
         if classification.intent is IntentType.CHAT:
             agent = Agent(self.build_model(), instructions=CHAT_SYSTEM_PROMPT)
-            result = await agent.run(user_request)
+            result = await self._run_with_timeout(agent.run(user_request))
             return AgentRunResult(
                 status=RunStatus.SUCCEEDED,
                 output=str(result.output),
@@ -77,7 +82,9 @@ class ProblemLocatorAgentRunner:
 
         context = await self.extract_troubleshooting_context(user_request)
         agent = Agent(self.build_model(), instructions=TROUBLESHOOTING_SYSTEM_PROMPT)
-        result = await agent.run(self._build_troubleshooting_prompt(user_request, context))
+        result = await self._run_with_timeout(
+            agent.run(self._build_troubleshooting_prompt(user_request, context))
+        )
         output = f"{context.to_markdown()}\n\n### 定位建议\n\n{result.output}"
         return AgentRunResult(
             status=RunStatus.SUCCEEDED,
@@ -113,37 +120,35 @@ class ProblemLocatorAgentRunner:
 
         if classification.intent is IntentType.CHAT:
             agent = Agent(self.build_model(), instructions=CHAT_SYSTEM_PROMPT)
-            async with agent.run_stream(user_request) as response:
-                async for delta in response.stream_text(delta=True, debounce_by=None):
-                    yield delta
+            async with asyncio.timeout(self.settings.request_timeout_seconds):
+                async with agent.run_stream(user_request) as response:
+                    async for delta in response.stream_text(delta=True, debounce_by=None):
+                        yield delta
             return
 
         context = await self.extract_troubleshooting_context(user_request)
         yield f"{context.to_markdown()}\n\n### 定位建议\n\n"
         agent = Agent(self.build_model(), instructions=TROUBLESHOOTING_SYSTEM_PROMPT)
-        async with agent.run_stream(
-            self._build_troubleshooting_prompt(user_request, context)
-        ) as response:
-            async for delta in response.stream_text(delta=True, debounce_by=None):
-                yield delta
+        async with asyncio.timeout(self.settings.request_timeout_seconds):
+            async with agent.run_stream(
+                self._build_troubleshooting_prompt(user_request, context)
+            ) as response:
+                async for delta in response.stream_text(delta=True, debounce_by=None):
+                    yield delta
 
     async def classify_intent(self, user_request: str) -> IntentClassification:
-        agent = Agent(
-            self.build_model(),
-            output_type=IntentClassification,
+        return await self._run_structured_output(
+            IntentClassification,
+            user_request,
             instructions=INTENT_SYSTEM_PROMPT,
         )
-        result = await agent.run(user_request)
-        return cast(IntentClassification, result.output)
 
     async def extract_troubleshooting_context(self, user_request: str) -> TroubleshootingContext:
-        agent = Agent(
-            self.build_model(),
-            output_type=TroubleshootingContext,
+        return await self._run_structured_output(
+            TroubleshootingContext,
+            user_request,
             instructions=TROUBLESHOOTING_EXTRACT_PROMPT,
         )
-        result = await agent.run(user_request)
-        return cast(TroubleshootingContext, result.output)
 
     def build_model(self) -> str | OpenAIChatModel:
         if self.settings.model_provider == "pydantic-ai":
@@ -158,6 +163,69 @@ class ProblemLocatorAgentRunner:
             ),
         )
         return OpenAIChatModel(cast(OpenAIModelName, self.settings.model), provider=provider)
+
+    async def _run_with_timeout(self, awaitable: Any) -> Any:
+        async with asyncio.timeout(self.settings.request_timeout_seconds):
+            return await awaitable
+
+    async def _run_structured_output(
+        self,
+        output_model: type[StructuredOutputModel],
+        user_request: str,
+        *,
+        instructions: str,
+    ) -> StructuredOutputModel:
+        errors: list[str] = []
+        for mode in self._structured_output_modes():
+            try:
+                return await self._run_structured_output_once(
+                    output_model,
+                    user_request,
+                    instructions=instructions,
+                    mode=mode,
+                )
+            except TimeoutError:
+                errors.append(f"{mode}: timeout")
+            except Exception as exc:
+                errors.append(f"{mode}: {exc.__class__.__name__}")
+                if self.settings.structured_output_mode != "auto":
+                    raise
+
+        raise RuntimeError(
+            "结构化输出失败，已按配置尝试以下模式：" + "; ".join(errors)
+        )
+
+    async def _run_structured_output_once(
+        self,
+        output_model: type[StructuredOutputModel],
+        user_request: str,
+        *,
+        instructions: str,
+        mode: StructuredOutputMode,
+    ) -> StructuredOutputModel:
+        agent = Agent(
+            self.build_model(),
+            output_type=self._build_structured_output_type(output_model, mode),
+            instructions=instructions,
+        )
+        result = await self._run_with_timeout(agent.run(user_request))
+        return cast(StructuredOutputModel, result.output)
+
+    def _structured_output_modes(self) -> tuple[StructuredOutputMode, ...]:
+        if self.settings.structured_output_mode == "auto":
+            return ("native", "tool", "prompted")
+        return (self.settings.structured_output_mode,)
+
+    def _build_structured_output_type(
+        self,
+        output_model: type[StructuredOutputModel],
+        mode: StructuredOutputMode,
+    ) -> Any:
+        if mode == "native":
+            return NativeOutput(output_model)
+        if mode == "tool":
+            return ToolOutput(output_model)
+        return PromptedOutput(output_model)
 
     def _mock_handle_request(
         self,

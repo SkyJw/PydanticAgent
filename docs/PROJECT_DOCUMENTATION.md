@@ -63,6 +63,14 @@
 - `PYDANTIC_AGENT_MODEL`
   - 在 `openai-compatible` 模式下表示模型名，例如 `deepseek-chat`。
   - 在 `pydantic-ai` 模式下表示完整模型字符串，例如 `openai:gpt-5.2`。
+- `PYDANTIC_AGENT_STRUCTURED_OUTPUT_MODE`
+  - 结构化输出模式，默认 `auto`。
+  - `auto`：按 `native -> tool -> prompted` 顺序尝试，当前模式超时或失败后自动降级。
+  - `native`：使用模型原生 structured output / JSON schema。
+  - `tool`：使用 tool calling 返回 Pydantic 结构化结果。
+  - `prompted`：通过 prompt 要求模型返回可解析 JSON，兼容性最好。
+- `PYDANTIC_AGENT_REQUEST_TIMEOUT_SECONDS`
+  - 每次大模型请求尝试的超时时间，默认 `30` 秒。
 - `PYDANTIC_AGENT_OPENAI_BASE_URL`
   - OpenAI-compatible 服务商 base URL。
   - 空字符串会被自动视为未配置。
@@ -137,6 +145,10 @@
   - 使用 Pydantic AI 的结构化输出返回 `IntentClassification`。
 - `extract_troubleshooting_context()`
   - 使用 Pydantic AI 的结构化输出返回 `TroubleshootingContext`。
+- 结构化输出模式
+  - `auto` 模式优先尝试 `native`，失败或超时后尝试 `tool`，最后回退到
+    `prompted`。
+  - 每次尝试都受 `request_timeout_seconds` 限制，避免内网兼容接口长时间卡住。
 - `_build_troubleshooting_prompt()`
   - 生成定位建议阶段的提示词。
   - 会排除 `password` 字段，并对问题描述里的密码文本进行脱敏。
@@ -259,6 +271,8 @@ $env:PYDANTIC_AGENT_MODEL_PROVIDER = "openai-compatible"
 $env:PYDANTIC_AGENT_MODEL = "deepseek-chat"
 $env:PYDANTIC_AGENT_OPENAI_BASE_URL = "https://api.deepseek.com/v1"
 $env:PYDANTIC_AGENT_OPENAI_API_KEY = "your-api-key"
+$env:PYDANTIC_AGENT_STRUCTURED_OUTPUT_MODE = "auto"
+$env:PYDANTIC_AGENT_REQUEST_TIMEOUT_SECONDS = "30"
 ```
 
 ### DashScope 兼容模式示例
