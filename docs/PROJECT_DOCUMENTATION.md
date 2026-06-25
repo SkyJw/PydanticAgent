@@ -70,7 +70,10 @@
   - `tool`：使用 tool calling 返回 Pydantic 结构化结果。
   - `prompted`：通过 prompt 要求模型返回可解析 JSON，兼容性最好。
 - `PYDANTIC_AGENT_REQUEST_TIMEOUT_SECONDS`
-  - 每次大模型请求尝试的超时时间，默认 `30` 秒。
+  - 每次大模型请求尝试的超时时间，默认 `7` 秒。
+- `PYDANTIC_AGENT_MODEL_RETRIES`
+  - Pydantic AI 模型调用、结构化输出校验、工具调用等可重试环节的最大重试次数，默认 `3` 次。
+  - 所有 `Agent` 构造、非流式 `run()` 和流式 `run_stream()` 调用都会显式使用该限制，避免调试时因无限或过多重试触发服务商限流。
 - `PYDANTIC_AGENT_OPENAI_BASE_URL`
   - OpenAI-compatible 服务商 base URL。
   - 空字符串会被自动视为未配置。
@@ -149,6 +152,9 @@
   - `auto` 模式优先尝试 `native`，失败或超时后尝试 `tool`，最后回退到
     `prompted`。
   - 每次尝试都受 `request_timeout_seconds` 限制，避免内网兼容接口长时间卡住。
+- 重试限制
+  - 所有 Pydantic AI `Agent` 都按 `model_retries` 构造。
+  - 每次 `run()` / `run_stream()` 也会显式传入 `model_retries`，统一限制模型输出、结构化校验和工具调用等可重试路径的次数。
 - `_build_troubleshooting_prompt()`
   - 生成定位建议阶段的提示词。
   - 会排除 `password` 字段，并对问题描述里的密码文本进行脱敏。
@@ -190,6 +196,7 @@ Textual TUI 入口：`ProblemLocatorApp`。
 - 顶部 Header。
 - 标题：底软问题辅助定位 Agent。
 - Markdown 输出区。
+- 右侧调试信息窗口：展示当前执行步骤、超时配置、重试配置、结构化输出尝试模式、失败/完成状态等运行进度。
 - 状态条：
   - `就绪`
   - `Agent 正在运行，大模型正在回答...`
@@ -207,6 +214,7 @@ Textual TUI 入口：`ProblemLocatorApp`。
 - agent 运行中禁用 Run 按钮。
 - agent 运行中再次提交会提示仍在运行。
 - 大模型回答通过 `stream_request()` 流式刷新到 Markdown 输出区。
+- 调试信息通过 `stream_request(..., debug=...)` 回调实时刷新到右侧窗口，便于在内网模型接口卡顿、超时或降级时判断当前运行到哪一步。
 - 兼容小键盘输入：
   - 数字 `0-9`
   - `decimal -> .`
@@ -272,7 +280,8 @@ $env:PYDANTIC_AGENT_MODEL = "deepseek-chat"
 $env:PYDANTIC_AGENT_OPENAI_BASE_URL = "https://api.deepseek.com/v1"
 $env:PYDANTIC_AGENT_OPENAI_API_KEY = "your-api-key"
 $env:PYDANTIC_AGENT_STRUCTURED_OUTPUT_MODE = "auto"
-$env:PYDANTIC_AGENT_REQUEST_TIMEOUT_SECONDS = "30"
+$env:PYDANTIC_AGENT_REQUEST_TIMEOUT_SECONDS = "7"
+$env:PYDANTIC_AGENT_MODEL_RETRIES = "3"
 ```
 
 ### DashScope 兼容模式示例

@@ -17,7 +17,19 @@ def test_settings_default_to_auto_structured_output_with_timeout() -> None:
     settings = Settings()
 
     assert settings.structured_output_mode == "auto"
-    assert settings.request_timeout_seconds == 30.0
+    assert settings.request_timeout_seconds == 7.0
+    assert settings.model_retries == 3
+
+
+def test_runner_passes_configured_retry_limit_to_agent() -> None:
+    runner = ProblemLocatorAgentRunner(
+        Settings(model_provider="pydantic-ai", model="test", model_retries=1)
+    )
+
+    agent = runner._build_agent(instructions="test")
+
+    assert agent._max_tool_retries == 1
+    assert agent._max_output_retries == 1
 
 
 def test_runner_auto_structured_output_modes_try_precise_modes_first() -> None:
