@@ -68,8 +68,10 @@ class ProblemLocatorAgentRunner:
 
         classification = await self.classify_intent(user_request)
         if classification.intent is IntentType.CHAT:
-            agent = Agent(self.build_model(), instructions=CHAT_SYSTEM_PROMPT)
-            result = await self._run_with_timeout(agent.run(user_request))
+            agent = self._build_agent(instructions=CHAT_SYSTEM_PROMPT)
+            result = await self._run_with_timeout(
+                agent.run(user_request, retries=self.settings.model_retries)
+            )
             return AgentRunResult(
                 status=RunStatus.SUCCEEDED,
                 output=str(result.output),
@@ -81,9 +83,12 @@ class ProblemLocatorAgentRunner:
             )
 
         context = await self.extract_troubleshooting_context(user_request)
-        agent = Agent(self.build_model(), instructions=TROUBLESHOOTING_SYSTEM_PROMPT)
+        agent = self._build_agent(instructions=TROUBLESHOOTING_SYSTEM_PROMPT)
         result = await self._run_with_timeout(
-            agent.run(self._build_troubleshooting_prompt(user_request, context))
+            agent.run(
+                self._build_troubleshooting_prompt(user_request, context),
+                retries=self.settings.model_retries,
+            )
         )
         output = f"{context.to_markdown()}\n\n### 定位建议\n\n{result.output}"
         return AgentRunResult(
@@ -119,19 +124,23 @@ class ProblemLocatorAgentRunner:
         yield "\n"
 
         if classification.intent is IntentType.CHAT:
-            agent = Agent(self.build_model(), instructions=CHAT_SYSTEM_PROMPT)
+            agent = self._build_agent(instructions=CHAT_SYSTEM_PROMPT)
             async with asyncio.timeout(self.settings.request_timeout_seconds):
-                async with agent.run_stream(user_request) as response:
+                async with agent.run_stream(
+                    user_request,
+                    retries=self.settings.model_retries,
+                ) as response:
                     async for delta in response.stream_text(delta=True, debounce_by=None):
                         yield delta
             return
 
         context = await self.extract_troubleshooting_context(user_request)
         yield f"{context.to_markdown()}\n\n### 定位建议\n\n"
-        agent = Agent(self.build_model(), instructions=TROUBLESHOOTING_SYSTEM_PROMPT)
+        agent = self._build_agent(instructions=TROUBLESHOOTING_SYSTEM_PROMPT)
         async with asyncio.timeout(self.settings.request_timeout_seconds):
             async with agent.run_stream(
-                self._build_troubleshooting_prompt(user_request, context)
+                self._build_troubleshooting_prompt(user_request, context),
+                retries=self.settings.model_retries,
             ) as response:
                 async for delta in response.stream_text(delta=True, debounce_by=None):
                     yield delta
@@ -163,6 +172,19 @@ class ProblemLocatorAgentRunner:
             ),
         )
         return OpenAIChatModel(cast(OpenAIModelName, self.settings.model), provider=provider)
+
+    def _build_agent(
+        self,
+        *,
+        instructions: str,
+        output_type: Any = str,
+    ) -> Agent[Any, Any]:
+        return Agent(
+            self.build_model(),
+            output_type=output_type,
+            instructions=instructions,
+            retries=self.settings.model_retries,
+        )
 
     async def _run_with_timeout(self, awaitable: Any) -> Any:
         async with asyncio.timeout(self.settings.request_timeout_seconds):
@@ -203,12 +225,13 @@ class ProblemLocatorAgentRunner:
         instructions: str,
         mode: StructuredOutputMode,
     ) -> StructuredOutputModel:
-        agent = Agent(
-            self.build_model(),
+        agent = self._build_agent(
             output_type=self._build_structured_output_type(output_model, mode),
             instructions=instructions,
         )
-        result = await self._run_with_timeout(agent.run(user_request))
+        result = await self._run_with_timeout(
+            agent.run(user_request, retries=self.settings.model_retries)
+        )
         return cast(StructuredOutputModel, result.output)
 
     def _structured_output_modes(self) -> tuple[StructuredOutputMode, ...]:
